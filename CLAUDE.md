@@ -15,9 +15,9 @@ uv run python -m src.main            # 本番実行
 
 ## 構成
 
-- `src/config.py` -- サブカテゴリ定義、学生トピック読み込み
+- `src/config.py` -- サブカテゴリ定義、ウォッチトピック読み込み（Google Sheets 優先、環境変数フォールバック）
 - `src/arxiv.py` -- arXiv RSS 取得・パース
-- `src/categorizer.py` -- Gemini 分類+要約+学生マッチ（1回の呼び出し）
+- `src/categorizer.py` -- Gemini 分類+要約+ウォッチトピックマッチ（1回の呼び出し）
 - `src/prompts.py` -- Gemini プロンプト
 - `src/notion_writer.py` -- Notion DB 書き込み
 - `src/notifier.py` -- Slack 通知

@@ -25,14 +25,14 @@ def _build_text(
         f"本日 {len(papers)} 件（new: {new_count}, cross: {cross_count}）",
     ]
 
-    # 学生関連
-    student_papers = [p for p in papers if p.matched_students]
-    if student_papers:
+    # 注目トピック
+    topic_papers = [p for p in papers if p.matched_topics]
+    if topic_papers:
         parts.append("")
-        parts.append("*学生関連*")
-        for p in student_papers:
-            students = ", ".join(f"@{s}" for s in p.matched_students)
-            parts.append(f"- {students}: <{p.url}|{p.title}>")
+        parts.append("*注目トピック*")
+        for p in topic_papers:
+            topics = ", ".join(p.matched_topics)
+            parts.append(f"- {topics}: <{p.url}|{p.title}>")
 
     # カテゴリ別件数
     by_category: dict[str, int] = defaultdict(int)
@@ -104,13 +104,13 @@ def format_dry_run(
     lines.append(f"Total: {len(papers)} papers (new: {new_count}, cross: {cross_count})")
     lines.append("")
 
-    # 学生関連
-    student_papers = [p for p in papers if p.matched_students]
-    if student_papers:
-        lines.append("[Student Matches]")
-        for p in student_papers:
-            students = ", ".join(p.matched_students)
-            lines.append(f"  {students}: {p.title}")
+    # 注目トピック
+    topic_papers = [p for p in papers if p.matched_topics]
+    if topic_papers:
+        lines.append("[Watch Topics]")
+        for p in topic_papers:
+            topics = ", ".join(p.matched_topics)
+            lines.append(f"  {topics}: {p.title}")
             lines.append(f"    {p.summary}")
             lines.append(f"    {p.url}")
         lines.append("")

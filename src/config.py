@@ -1,9 +1,13 @@
-"""サブカテゴリ定義と学生トピック読み込み。"""
+"""サブカテゴリ定義とウォッチトピック読み込み。"""
 
-import json
+import csv
+import io
 import logging
 import os
+import re
 from dataclasses import dataclass
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -23,33 +27,33 @@ SUBCATEGORY_ORDER = list(SUBCATEGORIES.keys())
 
 
 @dataclass(frozen=True)
-class StudentTopic:
-    """学生の研究トピック。"""
+class WatchTopic:
+    """ウォッチトピック。"""
 
-    name: str
+    label: str
     keywords: list[str]
     description: str
 
 
-def load_student_topics() -> list[StudentTopic]:
-    """環境変数 STUDENT_TOPICS_JSON から学生トピックを読み込む。"""
-    raw = os.environ.get("STUDENT_TOPICS_JSON", "")
-    if not raw:
-        return []
+def load_watch_topics() -> list[WatchTopic]:
+    """Google Sheets（CSV エクスポート）からウォッチトピックを読み込む。"""
+    sheet_id = os.environ["WATCH_TOPICS_SHEET_ID"]
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    resp.encoding = "utf-8"
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("Failed to parse STUDENT_TOPICS_JSON")
-        return []
+    reader = csv.reader(io.StringIO(resp.text))
+    next(reader)  # ヘッダーをスキップ
 
-    topics = []
-    for item in data:
-        topics.append(
-            StudentTopic(
-                name=item.get("name", ""),
-                keywords=item.get("keywords", []),
-                description=item.get("description", ""),
-            )
-        )
+    topics: list[WatchTopic] = []
+    for row in reader:
+        if len(row) < 3 or not row[1].strip():
+            continue
+        label = row[1].strip()
+        keywords = [k.strip() for k in re.split(r"[,，、]", row[2]) if k.strip()]
+        description = row[3].strip() if len(row) > 3 else ""
+        topics.append(WatchTopic(label=label, keywords=keywords, description=description))
+
+    logger.info("Loaded %d watch topics from Google Sheets", len(topics))
     return topics

@@ -62,14 +62,14 @@ def _build_page_children(
     """ページ本文ブロックを構築する。"""
     children: list[dict] = []
 
-    # 学生関連論文
-    student_papers = [p for p in papers if p.matched_students]
-    if student_papers:
-        children.append(_heading2("学生関連論文"))
-        for p in student_papers:
-            students = ", ".join(f"@{s}" for s in p.matched_students)
+    # 注目トピック
+    topic_papers = [p for p in papers if p.matched_topics]
+    if topic_papers:
+        children.append(_heading2("注目トピック"))
+        for p in topic_papers:
+            topics = ", ".join(p.matched_topics)
             children.append(
-                _bulleted_link(p.title, p.url, f"{students}\n{p.summary}")
+                _bulleted_link(p.title, p.url, f"{topics}\n{p.summary}")
             )
 
     # サブカテゴリ別

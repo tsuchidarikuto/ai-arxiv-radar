@@ -13,7 +13,7 @@ from google.genai import types
 from google.genai.errors import ClientError, ServerError
 
 from src.arxiv import Paper
-from src.config import StudentTopic, load_student_topics
+from src.config import WatchTopic, load_watch_topics
 from src.prompts import build_categorize_prompt
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ class CategorizedPaper:
     announce_type: str
     subcategory: str = "other"
     summary: str = ""
-    matched_students: list[str] = field(default_factory=list)
+    matched_topics: list[str] = field(default_factory=list)
 
 
 def _get_client() -> genai.Client:
@@ -118,14 +118,14 @@ def _parse_json(raw_text: str) -> Any:
         return None
 
 
-def _build_student_topics_section(topics: list[StudentTopic]) -> str:
-    """学生トピックをプロンプト用テキストに変換する。"""
+def _build_watch_topics_section(topics: list[WatchTopic]) -> str:
+    """ウォッチトピックをプロンプト用テキストに変換する。"""
     if not topics:
         return ""
     lines = []
     for t in topics:
         keywords = ", ".join(t.keywords)
-        lines.append(f"- {t.name}: keywords=[{keywords}], description=\"{t.description}\"")
+        lines.append(f"- {t.label}: keywords=[{keywords}], description=\"{t.description}\"")
     return "\n".join(lines)
 
 
@@ -149,10 +149,10 @@ def categorize_papers(papers: list[Paper]) -> list[CategorizedPaper]:
     client = _get_client()
     model = _get_model()
 
-    # 学生トピック読み込み
-    topics = load_student_topics()
-    student_section = _build_student_topics_section(topics)
-    system_prompt = build_categorize_prompt(student_section)
+    # ウォッチトピック読み込み
+    topics = load_watch_topics()
+    topics_section = _build_watch_topics_section(topics)
+    system_prompt = build_categorize_prompt(topics_section)
 
     content = _build_papers_content(papers)
 
@@ -180,7 +180,7 @@ def categorize_papers(papers: list[Paper]) -> list[CategorizedPaper]:
                 announce_type=p.announce_type,
                 subcategory=r.get("subcategory", "other"),
                 summary=r.get("summary", ""),
-                matched_students=r.get("matched_students", []),
+                matched_topics=r.get("matched_topics", []),
             )
         )
 

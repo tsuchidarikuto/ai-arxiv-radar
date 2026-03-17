@@ -36,7 +36,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           NOTION_WORKSPACE: ${{ secrets.NOTION_WORKSPACE }}
-          STUDENT_TOPICS_JSON: ${{ secrets.STUDENT_TOPICS_JSON }}
+          WATCH_TOPICS_SHEET_ID: ${{ secrets.WATCH_TOPICS_SHEET_ID }}
         run: uv run python -m src.main
 
       - name: 状態ファイルをコミット＆プッシュ
