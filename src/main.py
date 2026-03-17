@@ -49,18 +49,18 @@ def main() -> None:
 
     logger.info("Processing %d new paper(s)", len(new_papers))
 
-    # 3. Gemini で分類・要約・学生マッチ（1回の呼び出し）
-    categorized = categorize_papers(new_papers)
+    # 3. Gemini でトピック別マッチ + サブカテゴリ分類
+    categorized, topics = categorize_papers(new_papers)
 
     if args.dry_run:
-        print(format_dry_run(today, categorized))
+        print(format_dry_run(today, categorized, topics))
         return
 
     # 4. Notion にページを作成
-    notion_url = create_paper_page(categorized)
+    notion_url = create_paper_page(categorized, topics)
 
     # 5. Slack に通知
-    notify(today, categorized, notion_url)
+    notify(today, categorized, notion_url, topics)
 
     # 6. state を更新・保存
     state = mark_processed(state, new_papers)

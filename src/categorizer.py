@@ -14,13 +14,13 @@ from google.genai.errors import ClientError, ServerError
 
 from src.arxiv import Paper
 from src.config import WatchTopic, load_watch_topics
-from src.prompts import build_categorize_prompt
+from src.prompts import build_categorize_prompt, build_topic_match_prompt
 
 logger = logging.getLogger(__name__)
 
 _client: genai.Client | None = None
 
-_FALLBACK_MODEL = "gemini-2.5-flash-lite"
+_FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 5.0
 
@@ -52,7 +52,7 @@ def _get_client() -> genai.Client:
 
 
 def _get_model() -> str:
-    return os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+    return os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite-preview"
 
 
 def _call_model(
@@ -118,17 +118,6 @@ def _parse_json(raw_text: str) -> Any:
         return None
 
 
-def _build_watch_topics_section(topics: list[WatchTopic]) -> str:
-    """ウォッチトピックをプロンプト用テキストに変換する。"""
-    if not topics:
-        return ""
-    lines = []
-    for t in topics:
-        keywords = ", ".join(t.keywords)
-        lines.append(f"- {t.label}: keywords=[{keywords}], description=\"{t.description}\"")
-    return "\n".join(lines)
-
-
 def _build_papers_content(papers: list[Paper]) -> str:
     """論文リストを Gemini に渡す JSON 文字列に変換する。"""
     items = []
@@ -141,37 +130,89 @@ def _build_papers_content(papers: list[Paper]) -> str:
     return json.dumps(items, ensure_ascii=False)
 
 
-def categorize_papers(papers: list[Paper]) -> list[CategorizedPaper]:
-    """全論文を1回の Gemini 呼び出しで分類・要約・学生マッチングする。"""
+def categorize_papers(
+    papers: list[Paper],
+) -> tuple[list[CategorizedPaper], list[WatchTopic]]:
+    """トピック別 → サブカテゴリ分類の順で論文を処理する。
+
+    Returns:
+        (分類済み論文リスト, ウォッチトピックリスト)
+    """
+    topics = load_watch_topics()
+
     if not papers:
-        return []
+        return [], topics
 
     client = _get_client()
     model = _get_model()
 
-    # ウォッチトピック読み込み
-    topics = load_watch_topics()
-    topics_section = _build_watch_topics_section(topics)
-    system_prompt = build_categorize_prompt(topics_section)
+    paper_map = {p.arxiv_id: p for p in papers}
+    placed: dict[str, CategorizedPaper] = {}
+    remaining_papers = list(papers)
 
-    content = _build_papers_content(papers)
+    # トピック別マッチング
+    for topic in topics:
+        if not remaining_papers:
+            break
 
-    logger.info("Categorizing %d papers with %s", len(papers), model)
-    raw = _call_model(client, model, content, system_prompt)
-    results = _parse_json(raw)
+        system_prompt = build_topic_match_prompt(topic)
+        content = _build_papers_content(remaining_papers)
 
-    # 結果を Paper と結合
-    result_map: dict[str, dict] = {}
-    if results and isinstance(results, list):
-        for r in results:
-            aid = r.get("arxiv_id", "")
-            result_map[aid] = r
+        logger.info(
+            "Matching topic '%s' against %d papers with %s",
+            topic.label,
+            len(remaining_papers),
+            model,
+        )
+        raw = _call_model(client, model, content, system_prompt)
+        results = _parse_json(raw)
 
-    categorized: list[CategorizedPaper] = []
-    for p in papers:
-        r = result_map.get(p.arxiv_id, {})
-        categorized.append(
-            CategorizedPaper(
+        if results and isinstance(results, list):
+            matched_ids: set[str] = set()
+            for r in results:
+                aid = r.get("arxiv_id", "")
+                if aid not in paper_map or aid in placed:
+                    continue
+                p = paper_map[aid]
+                placed[aid] = CategorizedPaper(
+                    arxiv_id=p.arxiv_id,
+                    title=p.title,
+                    authors=p.authors,
+                    abstract=p.abstract,
+                    url=p.url,
+                    announce_type=p.announce_type,
+                    summary=r.get("summary", ""),
+                    matched_topics=[topic.label],
+                )
+                matched_ids.add(aid)
+            logger.info(
+                "Topic '%s': %d matched", topic.label, len(matched_ids)
+            )
+            remaining_papers = [
+                p for p in remaining_papers if p.arxiv_id not in matched_ids
+            ]
+
+    # 残り論文のサブカテゴリ分類
+    if remaining_papers:
+        system_prompt = build_categorize_prompt()
+        content = _build_papers_content(remaining_papers)
+
+        logger.info(
+            "Categorizing %d remaining papers with %s",
+            len(remaining_papers),
+            model,
+        )
+        raw = _call_model(client, model, content, system_prompt)
+        results = _parse_json(raw)
+
+        result_map: dict[str, dict] = {}
+        if results and isinstance(results, list):
+            for r in results:
+                result_map[r.get("arxiv_id", "")] = r
+
+        for p in remaining_papers:
+            r = result_map.get(p.arxiv_id, {})
+            placed[p.arxiv_id] = CategorizedPaper(
                 arxiv_id=p.arxiv_id,
                 title=p.title,
                 authors=p.authors,
@@ -180,9 +221,10 @@ def categorize_papers(papers: list[Paper]) -> list[CategorizedPaper]:
                 announce_type=p.announce_type,
                 subcategory=r.get("subcategory", "other"),
                 summary=r.get("summary", ""),
-                matched_topics=r.get("matched_topics", []),
             )
-        )
+
+    # 元の論文順を保持
+    categorized = [placed[p.arxiv_id] for p in papers if p.arxiv_id in placed]
 
     logger.info("Categorization complete: %d papers", len(categorized))
-    return categorized
+    return categorized, topics

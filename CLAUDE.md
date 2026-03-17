@@ -13,11 +13,15 @@ uv run python -m src.main            # 本番実行
 
 `.env` に設定（`.env.example` 参照）。`GEMINI_API_KEY`, `NOTION_API_KEY`, `NOTION_DATABASE_ID`, `SLACK_WEBHOOK_URL` が必須。
 
+## Gemini モデル
+
+デフォルトモデルは `gemini-3.1-flash-lite-preview` を使用する。環境変数 `GEMINI_MODEL` で上書き可能。
+
 ## 構成
 
 - `src/config.py` -- サブカテゴリ定義、ウォッチトピック読み込み（Google Sheets 優先、環境変数フォールバック）
 - `src/arxiv.py` -- arXiv RSS 取得・パース
-- `src/categorizer.py` -- Gemini 分類+要約+ウォッチトピックマッチ（1回の呼び出し）
+- `src/categorizer.py` -- Gemini トピック別マッチング + サブカテゴリ分類（トピック数 + 1 回の呼び出し）
 - `src/prompts.py` -- Gemini プロンプト
 - `src/notion_writer.py` -- Notion DB 書き込み
 - `src/notifier.py` -- Slack 通知

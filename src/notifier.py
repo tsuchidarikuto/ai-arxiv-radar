@@ -7,7 +7,7 @@ from collections import defaultdict
 import requests
 
 from src.categorizer import CategorizedPaper
-from src.config import SUBCATEGORIES, SUBCATEGORY_ORDER
+from src.config import SUBCATEGORIES, SUBCATEGORY_ORDER, WatchTopic
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ def _build_text(
     date_str: str,
     papers: list[CategorizedPaper],
     notion_url: str,
+    topics: list[WatchTopic],
 ) -> str:
     """Slack メッセージテキストを構築する。"""
     new_count = sum(1 for p in papers if p.announce_type == "new")
@@ -43,27 +44,27 @@ def _build_text(
 
     topic_buckets, _, other_papers = _split_by_topic(papers)
 
-    # トピック別
-    for label, bucket in topic_buckets.items():
+    # トピック別（登録順、0件も表示）
+    for topic in topics:
+        bucket = topic_buckets.get(topic.label, [])
         parts.append("")
-        parts.append(f"*{label}* ({len(bucket)}件)")
+        parts.append(f"*{topic.label}* ({len(bucket)}件)")
         for p in bucket:
             parts.append(f"- {p.title}")
 
     # その他（サブカテゴリ別件数）
-    if other_papers:
-        by_category: dict[str, int] = defaultdict(int)
-        for p in other_papers:
-            by_category[p.subcategory] += 1
+    by_category: dict[str, int] = defaultdict(int)
+    for p in other_papers:
+        by_category[p.subcategory] += 1
 
-        parts.append("")
-        parts.append(f"*その他* ({len(other_papers)}件)")
-        for key in SUBCATEGORY_ORDER:
-            count = by_category.get(key, 0)
-            if count == 0:
-                continue
-            cat_name = SUBCATEGORIES[key]
-            parts.append(f"- {cat_name}: {count}件")
+    parts.append("")
+    parts.append(f"*その他* ({len(other_papers)}件)")
+    for key in SUBCATEGORY_ORDER:
+        count = by_category.get(key, 0)
+        if count == 0:
+            continue
+        cat_name = SUBCATEGORIES[key]
+        parts.append(f"- {cat_name}: {count}件")
 
     # Notion リンク
     if notion_url:
@@ -77,13 +78,14 @@ def notify(
     date_str: str,
     papers: list[CategorizedPaper],
     notion_url: str,
+    topics: list[WatchTopic],
 ) -> None:
     """Slack にサマリーを送信する。"""
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook_url:
         raise RuntimeError("SLACK_WEBHOOK_URL environment variable is not set")
 
-    text = _build_text(date_str, papers, notion_url)
+    text = _build_text(date_str, papers, notion_url, topics)
     payload = {
         "text": text,
         "unfurl_links": False,
@@ -111,7 +113,9 @@ def notify_no_articles(date_str: str) -> None:
 
 
 def format_dry_run(
-    date_str: str, papers: list[CategorizedPaper]
+    date_str: str,
+    papers: list[CategorizedPaper],
+    topics: list[WatchTopic],
 ) -> str:
     """dry-run 時の標準出力用テキストを生成する。"""
     lines = [f"=== cs.SE arXiv Radar - {date_str} ===", ""]
@@ -127,9 +131,10 @@ def format_dry_run(
 
     topic_buckets, _, other_papers = _split_by_topic(papers)
 
-    # トピック別
-    for label, bucket in topic_buckets.items():
-        lines.append(f"[{label}] ({len(bucket)}件)")
+    # トピック別（登録順、0件も表示）
+    for topic in topics:
+        bucket = topic_buckets.get(topic.label, [])
+        lines.append(f"[{topic.label}] ({len(bucket)}件)")
         for p in bucket:
             lines.append(f"  - {p.title}")
             lines.append(f"    {p.summary}")
@@ -137,22 +142,21 @@ def format_dry_run(
         lines.append("")
 
     # その他（サブカテゴリ別）
-    if other_papers:
-        by_category: dict[str, list[CategorizedPaper]] = defaultdict(list)
-        for p in other_papers:
-            by_category[p.subcategory].append(p)
+    by_category: dict[str, list[CategorizedPaper]] = defaultdict(list)
+    for p in other_papers:
+        by_category[p.subcategory].append(p)
 
-        lines.append(f"[その他] ({len(other_papers)}件)")
-        for key in SUBCATEGORY_ORDER:
-            cat_papers = by_category.get(key, [])
-            if not cat_papers:
-                continue
-            cat_name = SUBCATEGORIES[key]
-            lines.append(f"  [{cat_name}] ({len(cat_papers)}件)")
-            for p in cat_papers:
-                lines.append(f"    - {p.title}")
-                lines.append(f"      {p.summary}")
-                lines.append(f"      {p.url}")
-        lines.append("")
+    lines.append(f"[その他] ({len(other_papers)}件)")
+    for key in SUBCATEGORY_ORDER:
+        cat_papers = by_category.get(key, [])
+        if not cat_papers:
+            continue
+        cat_name = SUBCATEGORIES[key]
+        lines.append(f"  [{cat_name}] ({len(cat_papers)}件)")
+        for p in cat_papers:
+            lines.append(f"    - {p.title}")
+            lines.append(f"      {p.summary}")
+            lines.append(f"      {p.url}")
+    lines.append("")
 
     return "\n".join(lines)
