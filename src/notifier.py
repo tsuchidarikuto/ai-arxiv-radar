@@ -86,8 +86,8 @@ def notify(
     text = _build_text(date_str, papers, notion_url)
     payload = {
         "text": text,
-        "unfurl_links": True,
-        "unfurl_media": True,
+        "unfurl_links": False,
+        "unfurl_media": False,
     }
 
     response = requests.post(webhook_url, json=payload, timeout=30)
