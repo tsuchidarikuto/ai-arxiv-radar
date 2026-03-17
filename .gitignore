@@ -1,0 +1,5 @@
+ai-news-radar/
+.env
+__pycache__/
+*.pyc
+.venv/
