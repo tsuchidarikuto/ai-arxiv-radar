@@ -65,11 +65,10 @@ def _build_text(
             cat_name = SUBCATEGORIES[key]
             parts.append(f"- {cat_name}: {count}件")
 
-    # Notion リンク（ベタ貼りで unfurl させる）
+    # Notion リンク
     if notion_url:
         parts.append("")
-        parts.append("*詳細はこちら:*")
-        parts.append(notion_url)
+        parts.append(f"<{notion_url}|詳細はこちら>")
 
     return "\n".join(parts)
 
