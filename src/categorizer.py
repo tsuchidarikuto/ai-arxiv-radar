@@ -5,6 +5,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from typing import Literal
 
 from google import genai
 from google.genai import types
@@ -12,7 +13,7 @@ from google.genai.errors import ClientError, ServerError
 from pydantic import BaseModel, Field
 
 from src.arxiv import Paper
-from src.config import WatchTopic, load_watch_topics
+from src.config import SUBCATEGORIES, WatchTopic, load_watch_topics
 from src.prompts import build_categorize_prompt, build_topic_match_prompt
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,8 @@ _RETRY_BASE_DELAY = 5.0
 
 
 # --- Pydantic schemas for structured output ---
+
+SubcategoryKey = Literal[tuple(SUBCATEGORIES.keys())]  # type: ignore[valid-type]
 
 
 class TopicMatchItem(BaseModel):
@@ -40,7 +43,7 @@ class TopicMatchResponse(BaseModel):
 
 class CategorizeItem(BaseModel):
     arxiv_id: str = Field(description="arXiv ID of the paper.")
-    subcategory: str = Field(description="サブカテゴリのキー。")
+    subcategory: SubcategoryKey = Field(description="サブカテゴリのキー。")  # type: ignore[valid-type]
     summary: str = Field(description="日本語2-3文の要約。")
 
 
