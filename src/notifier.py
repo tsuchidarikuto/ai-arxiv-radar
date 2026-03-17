@@ -35,11 +35,8 @@ def _build_text(
     topics: list[WatchTopic],
 ) -> str:
     """Slack メッセージテキストを構築する。"""
-    new_count = sum(1 for p in papers if p.announce_type == "new")
-    cross_count = sum(1 for p in papers if p.announce_type == "cross")
     parts: list[str] = [
         f"*cs.SE 新着論文 - {date_str}*",
-        f"本日 {len(papers)} 件（new: {new_count}, cross: {cross_count}）",
     ]
 
     topic_buckets, _, other_papers = _split_by_topic(papers)
@@ -124,9 +121,7 @@ def format_dry_run(
         lines.append("No new papers found today.")
         return "\n".join(lines)
 
-    new_count = sum(1 for p in papers if p.announce_type == "new")
-    cross_count = sum(1 for p in papers if p.announce_type == "cross")
-    lines.append(f"Total: {len(papers)} papers (new: {new_count}, cross: {cross_count})")
+    lines.append(f"Total: {len(papers)} papers")
     lines.append("")
 
     topic_buckets, _, other_papers = _split_by_topic(papers)
