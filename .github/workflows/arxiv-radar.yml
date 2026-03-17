@@ -48,6 +48,7 @@ jobs:
           git add data/state.json
           git diff --staged --quiet && exit 0
           git commit -m "Update state.json [skip ci]"
+          git pull --rebase origin main
           if ! git push; then
             echo "::warning::git push failed, creating PR as fallback"
             BRANCH="auto/update-state-$(date +%Y%m%d-%H%M%S)"
