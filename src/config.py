@@ -13,12 +13,13 @@ logger = logging.getLogger(__name__)
 
 SUBCATEGORIES: dict[str, str] = {
     "testing": "Software Testing",
-    "msr": "Mining Software Repositories",
-    "llm4se": "LLM for SE / Code Generation",
+    "llm4se": "LLM/AI for SE",
+    "security": "Software Security",
+    "repair": "Program Repair & Debugging",
     "maintenance": "Software Maintenance & Evolution",
-    "analysis": "Program Analysis",
-    "architecture": "Software Architecture",
-    "requirements": "Requirements Engineering",
+    "analysis": "Program Analysis & Verification",
+    "devops": "DevOps & Cloud Engineering",
+    "requirements": "Requirements & Design",
     "empirical": "Empirical Software Engineering",
     "other": "Other",
 }

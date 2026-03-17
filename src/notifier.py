@@ -12,6 +12,22 @@ from src.config import SUBCATEGORIES, SUBCATEGORY_ORDER
 logger = logging.getLogger(__name__)
 
 
+def _split_by_topic(
+    papers: list[CategorizedPaper],
+) -> tuple[dict[str, list[CategorizedPaper]], set[str], list[CategorizedPaper]]:
+    """トピック別バケットと、マッチしなかった論文を返す。"""
+    topic_buckets: dict[str, list[CategorizedPaper]] = {}
+    placed_ids: set[str] = set()
+    for p in papers:
+        if p.matched_topics:
+            label = p.matched_topics[0]
+            if p.arxiv_id not in placed_ids:
+                topic_buckets.setdefault(label, []).append(p)
+                placed_ids.add(p.arxiv_id)
+    other_papers = [p for p in papers if p.arxiv_id not in placed_ids]
+    return topic_buckets, placed_ids, other_papers
+
+
 def _build_text(
     date_str: str,
     papers: list[CategorizedPaper],
@@ -25,33 +41,35 @@ def _build_text(
         f"本日 {len(papers)} 件（new: {new_count}, cross: {cross_count}）",
     ]
 
-    # 注目トピック
-    topic_papers = [p for p in papers if p.matched_topics]
-    if topic_papers:
+    topic_buckets, _, other_papers = _split_by_topic(papers)
+
+    # トピック別
+    for label, bucket in topic_buckets.items():
         parts.append("")
-        parts.append("*注目トピック*")
-        for p in topic_papers:
-            topics = ", ".join(p.matched_topics)
-            parts.append(f"- {topics}: <{p.url}|{p.title}>")
+        parts.append(f"*{label}* ({len(bucket)}件)")
+        for p in bucket:
+            parts.append(f"- {p.title}")
 
-    # カテゴリ別件数
-    by_category: dict[str, int] = defaultdict(int)
-    for p in papers:
-        by_category[p.subcategory] += 1
+    # その他（サブカテゴリ別件数）
+    if other_papers:
+        by_category: dict[str, int] = defaultdict(int)
+        for p in other_papers:
+            by_category[p.subcategory] += 1
 
-    parts.append("")
-    parts.append("*カテゴリ別*")
-    for key in SUBCATEGORY_ORDER:
-        count = by_category.get(key, 0)
-        if count == 0:
-            continue
-        cat_name = SUBCATEGORIES[key]
-        parts.append(f"- {cat_name}: {count}件")
+        parts.append("")
+        parts.append(f"*その他* ({len(other_papers)}件)")
+        for key in SUBCATEGORY_ORDER:
+            count = by_category.get(key, 0)
+            if count == 0:
+                continue
+            cat_name = SUBCATEGORIES[key]
+            parts.append(f"- {cat_name}: {count}件")
 
-    # Notion リンク
+    # Notion リンク（ベタ貼りで unfurl させる）
     if notion_url:
         parts.append("")
-        parts.append(f"<{notion_url}|詳細を見る>")
+        parts.append("*詳細はこちら:*")
+        parts.append(notion_url)
 
     return "\n".join(parts)
 
@@ -67,7 +85,11 @@ def notify(
         raise RuntimeError("SLACK_WEBHOOK_URL environment variable is not set")
 
     text = _build_text(date_str, papers, notion_url)
-    payload = {"text": text}
+    payload = {
+        "text": text,
+        "unfurl_links": True,
+        "unfurl_media": True,
+    }
 
     response = requests.post(webhook_url, json=payload, timeout=30)
     response.raise_for_status()
@@ -104,32 +126,34 @@ def format_dry_run(
     lines.append(f"Total: {len(papers)} papers (new: {new_count}, cross: {cross_count})")
     lines.append("")
 
-    # 注目トピック
-    topic_papers = [p for p in papers if p.matched_topics]
-    if topic_papers:
-        lines.append("[Watch Topics]")
-        for p in topic_papers:
-            topics = ", ".join(p.matched_topics)
-            lines.append(f"  {topics}: {p.title}")
+    topic_buckets, _, other_papers = _split_by_topic(papers)
+
+    # トピック別
+    for label, bucket in topic_buckets.items():
+        lines.append(f"[{label}] ({len(bucket)}件)")
+        for p in bucket:
+            lines.append(f"  - {p.title}")
             lines.append(f"    {p.summary}")
             lines.append(f"    {p.url}")
         lines.append("")
 
-    # カテゴリ別
-    by_category: dict[str, list[CategorizedPaper]] = defaultdict(list)
-    for p in papers:
-        by_category[p.subcategory].append(p)
+    # その他（サブカテゴリ別）
+    if other_papers:
+        by_category: dict[str, list[CategorizedPaper]] = defaultdict(list)
+        for p in other_papers:
+            by_category[p.subcategory].append(p)
 
-    for key in SUBCATEGORY_ORDER:
-        cat_papers = by_category.get(key, [])
-        if not cat_papers:
-            continue
-        cat_name = SUBCATEGORIES[key]
-        lines.append(f"[{cat_name}] ({len(cat_papers)}件)")
-        for p in cat_papers:
-            lines.append(f"  - {p.title}")
-            lines.append(f"    {p.summary}")
-            lines.append(f"    {p.url}")
+        lines.append(f"[その他] ({len(other_papers)}件)")
+        for key in SUBCATEGORY_ORDER:
+            cat_papers = by_category.get(key, [])
+            if not cat_papers:
+                continue
+            cat_name = SUBCATEGORIES[key]
+            lines.append(f"  [{cat_name}] ({len(cat_papers)}件)")
+            for p in cat_papers:
+                lines.append(f"    - {p.title}")
+                lines.append(f"      {p.summary}")
+                lines.append(f"      {p.url}")
         lines.append("")
 
     return "\n".join(lines)

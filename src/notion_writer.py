@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -59,38 +60,47 @@ def _bulleted_link(title: str, url: str, suffix: str = "") -> dict:
 def _build_page_children(
     papers: list[CategorizedPaper], date_str: str
 ) -> list[dict]:
-    """ページ本文ブロックを構築する。"""
+    """ページ本文ブロックを構築する。
+
+    構造:
+      ## トピックA (N件)     -- ウォッチトピック別 H2
+      ## その他 (M件)        -- マッチしなかった論文
+        ### サブカテゴリ (K件) -- サブカテゴリ別 H3
+    """
     children: list[dict] = []
 
-    # 注目トピック
-    topic_papers = [p for p in papers if p.matched_topics]
-    if topic_papers:
-        children.append(_heading2("注目トピック"))
-        for p in topic_papers:
-            topics = ", ".join(p.matched_topics)
-            children.append(
-                _bulleted_link(p.title, p.url, f"{topics}\n{p.summary}")
-            )
-
-    # サブカテゴリ別
-    by_category: dict[str, list[CategorizedPaper]] = defaultdict(list)
+    # トピック別に振り分け（最初にマッチしたトピックに配置、重複なし）
+    topic_buckets: dict[str, list[CategorizedPaper]] = {}
+    placed_ids: set[str] = set()
     for p in papers:
-        by_category[p.subcategory].append(p)
+        if p.matched_topics:
+            label = p.matched_topics[0]
+            if p.arxiv_id not in placed_ids:
+                topic_buckets.setdefault(label, []).append(p)
+                placed_ids.add(p.arxiv_id)
 
-    for key in SUBCATEGORY_ORDER:
-        cat_papers = by_category.get(key, [])
-        if not cat_papers:
-            continue
+    # トピック別 H2
+    for label, bucket in topic_buckets.items():
+        children.append(_heading2(f"{label} ({len(bucket)}件)"))
+        for p in bucket:
+            children.append(_bulleted_link(p.title, p.url, p.summary))
 
-        cat_name = SUBCATEGORIES[key]
-        children.append(_heading2(f"{cat_name} ({len(cat_papers)}件)"))
-        for p in cat_papers:
-            authors = ", ".join(p.authors[:3])
-            if len(p.authors) > 3:
-                authors += " et al."
-            children.append(
-                _bulleted_link(p.title, p.url, f"{authors}\n{p.summary}")
-            )
+    # その他（マッチしなかった論文をサブカテゴリ別に）
+    other_papers = [p for p in papers if p.arxiv_id not in placed_ids]
+    if other_papers:
+        by_category: dict[str, list[CategorizedPaper]] = defaultdict(list)
+        for p in other_papers:
+            by_category[p.subcategory].append(p)
+
+        children.append(_heading2(f"その他 ({len(other_papers)}件)"))
+        for key in SUBCATEGORY_ORDER:
+            cat_papers = by_category.get(key, [])
+            if not cat_papers:
+                continue
+            cat_name = SUBCATEGORIES[key]
+            children.append(_heading3(f"{cat_name} ({len(cat_papers)}件)"))
+            for p in cat_papers:
+                children.append(_bulleted_link(p.title, p.url, p.summary))
 
     return children
 
@@ -133,11 +143,12 @@ def create_paper_page(papers: list[CategorizedPaper]) -> str:
         remaining = remaining[_NOTION_BLOCK_LIMIT:]
         client.blocks.children.append(block_id=page_id, children=batch)
 
-    # 公開 URL を構築
+    # 公開 URL を構築（スラッグ付き）
     workspace = os.environ.get("NOTION_WORKSPACE")
     if workspace:
         clean_id = page_id.replace("-", "")
-        page_url = f"https://{workspace}.notion.site/{clean_id}"
+        slug = re.sub(r"[^a-zA-Z0-9]+", "-", title).strip("-")
+        page_url = f"https://{workspace}.notion.site/{slug}-{clean_id}"
     else:
         page_url = page.get("url", "")
 
