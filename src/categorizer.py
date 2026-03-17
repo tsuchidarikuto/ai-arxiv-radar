@@ -3,14 +3,13 @@
 import json
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 from google import genai
 from google.genai import types
 from google.genai.errors import ClientError, ServerError
+from pydantic import BaseModel, Field
 
 from src.arxiv import Paper
 from src.config import WatchTopic, load_watch_topics
@@ -23,6 +22,33 @@ _client: genai.Client | None = None
 _FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 5.0
+
+
+# --- Pydantic schemas for structured output ---
+
+
+class TopicMatchItem(BaseModel):
+    arxiv_id: str = Field(description="arXiv ID of the matched paper.")
+    summary: str = Field(description="日本語2-3文の要約。")
+
+
+class TopicMatchResponse(BaseModel):
+    matches: list[TopicMatchItem] = Field(
+        description="マッチした論文のリスト。マッチする論文がなければ空配列。"
+    )
+
+
+class CategorizeItem(BaseModel):
+    arxiv_id: str = Field(description="arXiv ID of the paper.")
+    subcategory: str = Field(description="サブカテゴリのキー。")
+    summary: str = Field(description="日本語2-3文の要約。")
+
+
+class CategorizeResponse(BaseModel):
+    papers: list[CategorizeItem] = Field(description="分類済み論文のリスト。")
+
+
+# --- Data class ---
 
 
 @dataclass
@@ -55,10 +81,14 @@ def _get_model() -> str:
     return os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite-preview"
 
 
-def _call_model(
-    client: genai.Client, model_name: str, content: str, system_prompt: str
-) -> str:
-    """指定モデルで generate_content を呼び出す。503 フォールバック + 429 リトライ付き。"""
+def _call_model[T: BaseModel](
+    client: genai.Client,
+    model_name: str,
+    content: str,
+    system_prompt: str,
+    response_schema: type[T],
+) -> T:
+    """指定モデルで structured output を呼び出す。503 フォールバック + 429 リトライ付き。"""
     for attempt in range(_MAX_RETRIES):
         try:
             response = client.models.generate_content(
@@ -66,9 +96,12 @@ def _call_model(
                 contents=content,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
+                    response_mime_type="application/json",
+                    response_json_schema=response_schema.model_json_schema(),
                 ),
             )
-            return response.text.strip()
+            text = response.text or ""
+            return response_schema.model_validate_json(text)
         except ServerError as e:
             if e.code == 503 and model_name != _FALLBACK_MODEL:
                 logger.warning(
@@ -76,7 +109,9 @@ def _call_model(
                     model_name,
                     _FALLBACK_MODEL,
                 )
-                return _call_model(client, _FALLBACK_MODEL, content, system_prompt)
+                return _call_model(
+                    client, _FALLBACK_MODEL, content, system_prompt, response_schema
+                )
             raise
         except ClientError as e:
             if e.code == 429 and attempt < _MAX_RETRIES - 1:
@@ -91,31 +126,6 @@ def _call_model(
                 continue
             raise
     raise RuntimeError("Max retries exceeded")
-
-
-def _parse_json(raw_text: str) -> Any:
-    """Gemini のレスポンスから JSON をパースする。"""
-    text = raw_text
-    if text.startswith("```"):
-        lines = text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        text = "\n".join(lines)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    # JSON 文字列内の生改行をエスケープしてリトライ
-    try:
-        fixed = re.sub(
-            r'(?<=": ")(.*?)(?="[,}])',
-            lambda m: m.group(0).replace("\n", "\\n"),
-            text,
-            flags=re.DOTALL,
-        )
-        return json.loads(fixed)
-    except (json.JSONDecodeError, Exception):
-        logger.error("Failed to parse JSON: %s", raw_text[:500])
-        return None
 
 
 def _build_papers_content(papers: list[Paper]) -> str:
@@ -164,33 +174,30 @@ def categorize_papers(
             len(remaining_papers),
             model,
         )
-        raw = _call_model(client, model, content, system_prompt)
-        results = _parse_json(raw)
+        result = _call_model(
+            client, model, content, system_prompt, TopicMatchResponse
+        )
 
-        if results and isinstance(results, list):
-            matched_ids: set[str] = set()
-            for r in results:
-                aid = r.get("arxiv_id", "")
-                if aid not in paper_map or aid in placed:
-                    continue
-                p = paper_map[aid]
-                placed[aid] = CategorizedPaper(
-                    arxiv_id=p.arxiv_id,
-                    title=p.title,
-                    authors=p.authors,
-                    abstract=p.abstract,
-                    url=p.url,
-                    announce_type=p.announce_type,
-                    summary=r.get("summary", ""),
-                    matched_topics=[topic.label],
-                )
-                matched_ids.add(aid)
-            logger.info(
-                "Topic '%s': %d matched", topic.label, len(matched_ids)
+        matched_ids: set[str] = set()
+        for item in result.matches:
+            if item.arxiv_id not in paper_map or item.arxiv_id in placed:
+                continue
+            p = paper_map[item.arxiv_id]
+            placed[item.arxiv_id] = CategorizedPaper(
+                arxiv_id=p.arxiv_id,
+                title=p.title,
+                authors=p.authors,
+                abstract=p.abstract,
+                url=p.url,
+                announce_type=p.announce_type,
+                summary=item.summary,
+                matched_topics=[topic.label],
             )
-            remaining_papers = [
-                p for p in remaining_papers if p.arxiv_id not in matched_ids
-            ]
+            matched_ids.add(item.arxiv_id)
+        logger.info("Topic '%s': %d matched", topic.label, len(matched_ids))
+        remaining_papers = [
+            p for p in remaining_papers if p.arxiv_id not in matched_ids
+        ]
 
     # 残り論文のサブカテゴリ分類
     if remaining_papers:
@@ -202,16 +209,16 @@ def categorize_papers(
             len(remaining_papers),
             model,
         )
-        raw = _call_model(client, model, content, system_prompt)
-        results = _parse_json(raw)
+        result = _call_model(
+            client, model, content, system_prompt, CategorizeResponse
+        )
 
-        result_map: dict[str, dict] = {}
-        if results and isinstance(results, list):
-            for r in results:
-                result_map[r.get("arxiv_id", "")] = r
+        result_map: dict[str, CategorizeItem] = {}
+        for item in result.papers:
+            result_map[item.arxiv_id] = item
 
         for p in remaining_papers:
-            r = result_map.get(p.arxiv_id, {})
+            item = result_map.get(p.arxiv_id)
             placed[p.arxiv_id] = CategorizedPaper(
                 arxiv_id=p.arxiv_id,
                 title=p.title,
@@ -219,8 +226,8 @@ def categorize_papers(
                 abstract=p.abstract,
                 url=p.url,
                 announce_type=p.announce_type,
-                subcategory=r.get("subcategory", "other"),
-                summary=r.get("summary", ""),
+                subcategory=item.subcategory if item else "other",
+                summary=item.summary if item else "",
             )
 
     # 元の論文順を保持
