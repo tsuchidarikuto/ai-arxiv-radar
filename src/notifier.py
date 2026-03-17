@@ -6,7 +6,7 @@ from collections import defaultdict
 
 import requests
 
-from src.categorizer import CategorizedPaper
+from src.categorizer import CategorizedPaper, PickupPaper
 from src.config import SUBCATEGORIES, SUBCATEGORY_ORDER, WatchTopic
 
 logger = logging.getLogger(__name__)
@@ -33,11 +33,27 @@ def _build_text(
     papers: list[CategorizedPaper],
     notion_url: str,
     topics: list[WatchTopic],
+    daily_summary: str = "",
+    picks: list[PickupPaper] | None = None,
 ) -> str:
     """Slack メッセージテキストを構築する。"""
     parts: list[str] = [
         f"*cs.SE 新着論文 - {date_str}*",
     ]
+
+    if daily_summary:
+        parts.append("")
+        parts.append(daily_summary)
+
+    if picks:
+        paper_map = {p.arxiv_id: p for p in papers}
+        parts.append("")
+        parts.append("*今日のピックアップ*")
+        for pick in picks:
+            p = paper_map.get(pick.arxiv_id)
+            title = p.title if p else pick.arxiv_id
+            parts.append(f"- {title}")
+            parts.append(f"  {pick.summary}")
 
     topic_buckets, _, other_papers = _split_by_topic(papers)
 
@@ -76,13 +92,15 @@ def notify(
     papers: list[CategorizedPaper],
     notion_url: str,
     topics: list[WatchTopic],
+    daily_summary: str = "",
+    picks: list[PickupPaper] | None = None,
 ) -> None:
     """Slack にサマリーを送信する。"""
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook_url:
         raise RuntimeError("SLACK_WEBHOOK_URL environment variable is not set")
 
-    text = _build_text(date_str, papers, notion_url, topics)
+    text = _build_text(date_str, papers, notion_url, topics, daily_summary, picks)
     payload = {
         "text": text,
         "unfurl_links": False,
@@ -113,6 +131,8 @@ def format_dry_run(
     date_str: str,
     papers: list[CategorizedPaper],
     topics: list[WatchTopic],
+    daily_summary: str = "",
+    picks: list[PickupPaper] | None = None,
 ) -> str:
     """dry-run 時の標準出力用テキストを生成する。"""
     lines = [f"=== cs.SE arXiv Radar - {date_str} ===", ""]
@@ -120,6 +140,21 @@ def format_dry_run(
     if not papers:
         lines.append("No new papers found today.")
         return "\n".join(lines)
+
+    if daily_summary:
+        lines.append("[本日のサマリー]")
+        lines.append(daily_summary)
+        lines.append("")
+
+    if picks:
+        paper_map = {p.arxiv_id: p for p in papers}
+        lines.append("[今日のピックアップ]")
+        for pick in picks:
+            p = paper_map.get(pick.arxiv_id)
+            title = p.title if p else pick.arxiv_id
+            lines.append(f"  - {title}")
+            lines.append(f"    {pick.summary}")
+        lines.append("")
 
     lines.append(f"Total: {len(papers)} papers")
     lines.append("")

@@ -61,15 +61,21 @@ def _build_page_children(
     papers: list[CategorizedPaper],
     date_str: str,
     topics: list[WatchTopic],
+    daily_summary: str = "",
 ) -> list[dict]:
     """ページ本文ブロックを構築する。
 
     構造:
+      ## 本日のサマリー       -- daily_summary がある場合のみ
       ## トピックA (N件)     -- ウォッチトピック別 H2（0件も表示）
       ## その他 (M件)        -- マッチしなかった論文
         ### サブカテゴリ (K件) -- サブカテゴリ別 H3
     """
     children: list[dict] = []
+
+    if daily_summary:
+        children.append(_heading2("本日のサマリー"))
+        children.append(_paragraph(daily_summary))
 
     # トピック別に振り分け
     topic_buckets: dict[str, list[CategorizedPaper]] = {}
@@ -111,7 +117,9 @@ _NOTION_BLOCK_LIMIT = 100
 
 
 def create_paper_page(
-    papers: list[CategorizedPaper], topics: list[WatchTopic]
+    papers: list[CategorizedPaper],
+    topics: list[WatchTopic],
+    daily_summary: str = "",
 ) -> str:
     """Notion DB に論文ページを作成する。
 
@@ -126,7 +134,7 @@ def create_paper_page(
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     title = f"cs.SE 新着論文 - {today}"
 
-    all_children = _build_page_children(papers, today, topics)
+    all_children = _build_page_children(papers, today, topics, daily_summary)
     first_batch = all_children[:_NOTION_BLOCK_LIMIT]
     remaining = all_children[_NOTION_BLOCK_LIMIT:]
 

@@ -14,7 +14,11 @@ from pydantic import BaseModel, Field
 
 from src.arxiv import Paper
 from src.config import SUBCATEGORIES, WatchTopic, load_watch_topics
-from src.prompts import build_categorize_prompt, build_topic_match_prompt
+from src.prompts import (
+    build_categorize_prompt,
+    build_daily_summary_prompt,
+    build_topic_match_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +53,16 @@ class CategorizeItem(BaseModel):
 
 class CategorizeResponse(BaseModel):
     papers: list[CategorizeItem] = Field(description="分類済み論文のリスト。")
+
+
+class PickupPaper(BaseModel):
+    arxiv_id: str = Field(description="arXiv ID of the picked paper.")
+    summary: str = Field(description="日本語1文の要約。")
+
+
+class DailySummaryResponse(BaseModel):
+    summary: str = Field(description="本日の論文全体の傾向を3行で。")
+    picks: list[PickupPaper] = Field(description="注目論文1件。")
 
 
 # --- Data class ---
@@ -238,3 +252,28 @@ def categorize_papers(
 
     logger.info("Categorization complete: %d papers", len(categorized))
     return categorized, topics
+
+
+def generate_daily_summary(
+    papers: list[CategorizedPaper],
+) -> DailySummaryResponse:
+    """分類済み論文から日次サマリーとピックアップを生成する。"""
+    if not papers:
+        return DailySummaryResponse(summary="本日の新着論文はありませんでした。", picks=[])
+
+    client = _get_client()
+    model = _get_model()
+
+    items = []
+    for p in papers:
+        items.append({
+            "arxiv_id": p.arxiv_id,
+            "title": p.title,
+            "summary": p.summary,
+        })
+    content = json.dumps(items, ensure_ascii=False)
+
+    logger.info("Generating daily summary for %d papers with %s", len(papers), model)
+    return _call_model(
+        client, model, content, build_daily_summary_prompt(), DailySummaryResponse
+    )
