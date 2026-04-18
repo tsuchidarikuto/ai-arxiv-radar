@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.arxiv import fetch_papers
-from src.categorizer import categorize_papers, generate_daily_summary
+from src.categorizer import categorize_papers
 from src.notion_writer import create_paper_page
 from src.notifier import format_dry_run, notify, notify_no_articles
 from src.state import filter_new_papers, load_state, mark_processed, save_state
@@ -52,20 +52,17 @@ def main() -> None:
     # 3. Gemini でトピック別マッチ + サブカテゴリ分類
     categorized, topics = categorize_papers(new_papers)
 
-    # 4. 日次サマリー + ピックアップ生成
-    daily = generate_daily_summary(categorized)
-
     if args.dry_run:
-        print(format_dry_run(today, categorized, topics, daily.summary, daily.picks))
+        print(format_dry_run(today, categorized, topics))
         return
 
-    # 5. Notion にページを作成
-    notion_url = create_paper_page(categorized, topics, daily.summary)
+    # 4. Notion にページを作成
+    notion_url = create_paper_page(categorized, topics)
 
-    # 6. Slack に通知
-    notify(today, categorized, notion_url, topics, daily.summary, daily.picks)
+    # 5. Slack に通知
+    notify(today, categorized, notion_url, topics)
 
-    # 7. state を更新・保存
+    # 6. state を更新・保存
     state = mark_processed(state, new_papers)
     save_state(state)
 

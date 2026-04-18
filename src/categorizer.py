@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Literal
@@ -14,11 +15,7 @@ from pydantic import BaseModel, Field
 
 from src.arxiv import Paper
 from src.config import SUBCATEGORIES, WatchTopic, load_watch_topics
-from src.prompts import (
-    build_categorize_prompt,
-    build_daily_summary_prompt,
-    build_topic_match_prompt,
-)
+from src.prompts import build_categorize_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -34,17 +31,6 @@ _RETRY_BASE_DELAY = 5.0
 SubcategoryKey = Literal[tuple(SUBCATEGORIES.keys())]  # type: ignore[valid-type]
 
 
-class TopicMatchItem(BaseModel):
-    arxiv_id: str = Field(description="arXiv ID of the matched paper.")
-    summary: str = Field(description="日本語2-3文の要約。")
-
-
-class TopicMatchResponse(BaseModel):
-    matches: list[TopicMatchItem] = Field(
-        description="マッチした論文のリスト。マッチする論文がなければ空配列。"
-    )
-
-
 class CategorizeItem(BaseModel):
     arxiv_id: str = Field(description="arXiv ID of the paper.")
     subcategory: SubcategoryKey = Field(description="サブカテゴリのキー。")  # type: ignore[valid-type]
@@ -53,16 +39,6 @@ class CategorizeItem(BaseModel):
 
 class CategorizeResponse(BaseModel):
     papers: list[CategorizeItem] = Field(description="分類済み論文のリスト。")
-
-
-class PickupPaper(BaseModel):
-    arxiv_id: str = Field(description="arXiv ID of the picked paper.")
-    summary: str = Field(description="日本語1文の要約。")
-
-
-class DailySummaryResponse(BaseModel):
-    summary: str = Field(description="本日の論文全体の傾向を3行で。")
-    picks: list[PickupPaper] = Field(description="注目論文1件。")
 
 
 # --- Data class ---
@@ -157,10 +133,26 @@ def _build_papers_content(papers: list[Paper]) -> str:
     return json.dumps(items, ensure_ascii=False)
 
 
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize(text: str) -> str:
+    """大小文字・連続空白を畳んだ比較用文字列を返す。"""
+    return _WS_RE.sub(" ", text.lower())
+
+
+def _match_topic(paper: Paper, topic: WatchTopic) -> bool:
+    """keyword のうち 1 つでも title / abstract に literal 含まれているか。"""
+    if not topic.keywords:
+        return False
+    haystack = _normalize(f"{paper.title} {paper.abstract}")
+    return any(_normalize(kw) in haystack for kw in topic.keywords if kw.strip())
+
+
 def categorize_papers(
     papers: list[Paper],
 ) -> tuple[list[CategorizedPaper], list[WatchTopic]]:
-    """トピック別 → サブカテゴリ分類の順で論文を処理する。
+    """キーワードベースでトピックを割り当て、Gemini でサブカテゴリ+要約を付与する。
 
     Returns:
         (分類済み論文リスト, ウォッチトピックリスト)
@@ -173,70 +165,32 @@ def categorize_papers(
     client = _get_client()
     model = _get_model()
 
-    paper_map = {p.arxiv_id: p for p in papers}
-    placed: dict[str, CategorizedPaper] = {}
-    remaining_papers = list(papers)
+    # 全論文まとめてサブカテゴリ + 要約を Gemini に依頼
+    system_prompt = build_categorize_prompt()
+    content = _build_papers_content(papers)
 
-    # トピック別マッチング
-    for topic in topics:
-        if not remaining_papers:
-            break
+    logger.info("Categorizing %d papers with %s", len(papers), model)
+    result = _call_model(client, model, content, system_prompt, CategorizeResponse)
 
-        system_prompt = build_topic_match_prompt(topic)
-        content = _build_papers_content(remaining_papers)
+    result_map: dict[str, CategorizeItem] = {
+        item.arxiv_id: item for item in result.papers
+    }
 
-        logger.info(
-            "Matching topic '%s' against %d papers with %s",
-            topic.label,
-            len(remaining_papers),
-            model,
-        )
-        result = _call_model(
-            client, model, content, system_prompt, TopicMatchResponse
-        )
+    categorized: list[CategorizedPaper] = []
+    topic_counts: dict[str, int] = {t.label: 0 for t in topics}
 
-        matched_ids: set[str] = set()
-        for item in result.matches:
-            if item.arxiv_id not in paper_map or item.arxiv_id in placed:
-                continue
-            p = paper_map[item.arxiv_id]
-            placed[item.arxiv_id] = CategorizedPaper(
-                arxiv_id=p.arxiv_id,
-                title=p.title,
-                authors=p.authors,
-                abstract=p.abstract,
-                url=p.url,
-                announce_type=p.announce_type,
-                summary=item.summary,
-                matched_topics=[topic.label],
-            )
-            matched_ids.add(item.arxiv_id)
-        logger.info("Topic '%s': %d matched", topic.label, len(matched_ids))
-        remaining_papers = [
-            p for p in remaining_papers if p.arxiv_id not in matched_ids
-        ]
+    for p in papers:
+        item = result_map.get(p.arxiv_id)
 
-    # 残り論文のサブカテゴリ分類
-    if remaining_papers:
-        system_prompt = build_categorize_prompt()
-        content = _build_papers_content(remaining_papers)
+        matched: list[str] = []
+        for topic in topics:
+            if _match_topic(p, topic):
+                matched.append(topic.label)
+                topic_counts[topic.label] += 1
+                break  # Sheet 順で先勝ち
 
-        logger.info(
-            "Categorizing %d remaining papers with %s",
-            len(remaining_papers),
-            model,
-        )
-        result = _call_model(
-            client, model, content, system_prompt, CategorizeResponse
-        )
-
-        result_map: dict[str, CategorizeItem] = {}
-        for item in result.papers:
-            result_map[item.arxiv_id] = item
-
-        for p in remaining_papers:
-            item = result_map.get(p.arxiv_id)
-            placed[p.arxiv_id] = CategorizedPaper(
+        categorized.append(
+            CategorizedPaper(
                 arxiv_id=p.arxiv_id,
                 title=p.title,
                 authors=p.authors,
@@ -245,35 +199,11 @@ def categorize_papers(
                 announce_type=p.announce_type,
                 subcategory=item.subcategory if item else "other",
                 summary=item.summary if item else "",
+                matched_topics=matched,
             )
+        )
 
-    # 元の論文順を保持
-    categorized = [placed[p.arxiv_id] for p in papers if p.arxiv_id in placed]
-
+    for label, count in topic_counts.items():
+        logger.info("Topic '%s': %d matched", label, count)
     logger.info("Categorization complete: %d papers", len(categorized))
     return categorized, topics
-
-
-def generate_daily_summary(
-    papers: list[CategorizedPaper],
-) -> DailySummaryResponse:
-    """分類済み論文から日次サマリーとピックアップを生成する。"""
-    if not papers:
-        return DailySummaryResponse(summary="本日の新着論文はありませんでした。", picks=[])
-
-    client = _get_client()
-    model = _get_model()
-
-    items = []
-    for p in papers:
-        items.append({
-            "arxiv_id": p.arxiv_id,
-            "title": p.title,
-            "summary": p.summary,
-        })
-    content = json.dumps(items, ensure_ascii=False)
-
-    logger.info("Generating daily summary for %d papers with %s", len(papers), model)
-    return _call_model(
-        client, model, content, build_daily_summary_prompt(), DailySummaryResponse
-    )

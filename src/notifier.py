@@ -2,19 +2,18 @@
 
 import logging
 import os
-from collections import defaultdict
 
 import requests
 
-from src.categorizer import CategorizedPaper, PickupPaper
-from src.config import SUBCATEGORIES, SUBCATEGORY_ORDER, WatchTopic
+from src.categorizer import CategorizedPaper
+from src.config import WatchTopic
 
 logger = logging.getLogger(__name__)
 
 
 def _split_by_topic(
     papers: list[CategorizedPaper],
-) -> tuple[dict[str, list[CategorizedPaper]], set[str], list[CategorizedPaper]]:
+) -> tuple[dict[str, list[CategorizedPaper]], list[CategorizedPaper]]:
     """トピック別バケットと、マッチしなかった論文を返す。"""
     topic_buckets: dict[str, list[CategorizedPaper]] = {}
     placed_ids: set[str] = set()
@@ -25,7 +24,7 @@ def _split_by_topic(
                 topic_buckets.setdefault(label, []).append(p)
                 placed_ids.add(p.arxiv_id)
     other_papers = [p for p in papers if p.arxiv_id not in placed_ids]
-    return topic_buckets, placed_ids, other_papers
+    return topic_buckets, other_papers
 
 
 def _build_text(
@@ -33,56 +32,28 @@ def _build_text(
     papers: list[CategorizedPaper],
     notion_url: str,
     topics: list[WatchTopic],
-    daily_summary: str = "",
-    picks: list[PickupPaper] | None = None,
 ) -> str:
     """Slack メッセージテキストを構築する。"""
-    parts: list[str] = [
-        f"*cs.SE 新着論文 - {date_str}*",
-    ]
+    parts: list[str] = [f"*cs.SE 新着論文 - {date_str}*"]
 
-    if daily_summary:
-        parts.append("")
-        parts.append(daily_summary)
+    topic_buckets, other_papers = _split_by_topic(papers)
 
-    if picks:
-        paper_map = {p.arxiv_id: p for p in papers}
-        parts.append("")
-        parts.append("*今日のピックアップ*")
-        for pick in picks:
-            p = paper_map.get(pick.arxiv_id)
-            title = p.title if p else pick.arxiv_id
-            parts.append(f"- {title}")
-            parts.append(f"  {pick.summary}")
-
-    topic_buckets, _, other_papers = _split_by_topic(papers)
-
-    # トピック別（登録順、0件も表示）
     for topic in topics:
         bucket = topic_buckets.get(topic.label, [])
+        if not bucket:
+            continue
         parts.append("")
+        if topic.slack_user_id:
+            parts.append(f"<@{topic.slack_user_id}>")
         parts.append(f"*{topic.label}* ({len(bucket)}件)")
         for p in bucket:
-            parts.append(f"- {p.title}")
+            parts.append(f"- <{p.url}|{p.title}>")
 
-    # その他（サブカテゴリ別件数）
-    by_category: dict[str, int] = defaultdict(int)
-    for p in other_papers:
-        by_category[p.subcategory] += 1
-
-    parts.append("")
-    parts.append(f"*その他* ({len(other_papers)}件)")
-    for key in SUBCATEGORY_ORDER:
-        count = by_category.get(key, 0)
-        if count == 0:
-            continue
-        cat_name = SUBCATEGORIES[key]
-        parts.append(f"- {cat_name}: {count}件")
-
-    # Notion リンク
     if notion_url:
         parts.append("")
-        parts.append(f"<{notion_url}|詳細はこちら>")
+        parts.append(
+            f"<{notion_url}|論文の概要 & その他の論文({len(other_papers)})はこちら>"
+        )
 
     return "\n".join(parts)
 
@@ -92,15 +63,13 @@ def notify(
     papers: list[CategorizedPaper],
     notion_url: str,
     topics: list[WatchTopic],
-    daily_summary: str = "",
-    picks: list[PickupPaper] | None = None,
 ) -> None:
     """Slack にサマリーを送信する。"""
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook_url:
         raise RuntimeError("SLACK_WEBHOOK_URL environment variable is not set")
 
-    text = _build_text(date_str, papers, notion_url, topics, daily_summary, picks)
+    text = _build_text(date_str, papers, notion_url, topics)
     payload = {
         "text": text,
         "unfurl_links": False,
@@ -131,8 +100,6 @@ def format_dry_run(
     date_str: str,
     papers: list[CategorizedPaper],
     topics: list[WatchTopic],
-    daily_summary: str = "",
-    picks: list[PickupPaper] | None = None,
 ) -> str:
     """dry-run 時の標準出力用テキストを生成する。"""
     lines = [f"=== cs.SE arXiv Radar - {date_str} ===", ""]
@@ -141,52 +108,24 @@ def format_dry_run(
         lines.append("No new papers found today.")
         return "\n".join(lines)
 
-    if daily_summary:
-        lines.append("[本日のサマリー]")
-        lines.append(daily_summary)
-        lines.append("")
-
-    if picks:
-        paper_map = {p.arxiv_id: p for p in papers}
-        lines.append("[今日のピックアップ]")
-        for pick in picks:
-            p = paper_map.get(pick.arxiv_id)
-            title = p.title if p else pick.arxiv_id
-            lines.append(f"  - {title}")
-            lines.append(f"    {pick.summary}")
-        lines.append("")
-
     lines.append(f"Total: {len(papers)} papers")
-    lines.append("")
 
-    topic_buckets, _, other_papers = _split_by_topic(papers)
+    topic_buckets, other_papers = _split_by_topic(papers)
 
-    # トピック別（登録順、0件も表示）
     for topic in topics:
         bucket = topic_buckets.get(topic.label, [])
+        if not bucket:
+            continue
+        lines.append("")
+        if topic.slack_user_id:
+            lines.append(f"[@{topic.slack_user_id}]")
         lines.append(f"[{topic.label}] ({len(bucket)}件)")
         for p in bucket:
             lines.append(f"  - {p.title}")
             lines.append(f"    {p.summary}")
             lines.append(f"    {p.url}")
-        lines.append("")
 
-    # その他（サブカテゴリ別）
-    by_category: dict[str, list[CategorizedPaper]] = defaultdict(list)
-    for p in other_papers:
-        by_category[p.subcategory].append(p)
-
-    lines.append(f"[その他] ({len(other_papers)}件)")
-    for key in SUBCATEGORY_ORDER:
-        cat_papers = by_category.get(key, [])
-        if not cat_papers:
-            continue
-        cat_name = SUBCATEGORIES[key]
-        lines.append(f"  [{cat_name}] ({len(cat_papers)}件)")
-        for p in cat_papers:
-            lines.append(f"    - {p.title}")
-            lines.append(f"      {p.summary}")
-            lines.append(f"      {p.url}")
     lines.append("")
+    lines.append(f"Unmatched: {len(other_papers)} papers")
 
     return "\n".join(lines)

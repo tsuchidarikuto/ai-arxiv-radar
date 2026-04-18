@@ -30,22 +30,6 @@ def _heading2(text: str) -> dict:
     }
 
 
-def _heading3(text: str) -> dict:
-    return {
-        "object": "block",
-        "type": "heading_3",
-        "heading_3": {"rich_text": [{"type": "text", "text": {"content": text}}]},
-    }
-
-
-def _paragraph(text: str) -> dict:
-    return {
-        "object": "block",
-        "type": "paragraph",
-        "paragraph": {"rich_text": [{"type": "text", "text": {"content": text}}]},
-    }
-
-
 def _bulleted_link(title: str, url: str, suffix: str = "") -> dict:
     rich_text = [{"type": "text", "text": {"content": title, "link": {"url": url}}}]
     if suffix:
@@ -59,23 +43,15 @@ def _bulleted_link(title: str, url: str, suffix: str = "") -> dict:
 
 def _build_page_children(
     papers: list[CategorizedPaper],
-    date_str: str,
     topics: list[WatchTopic],
-    daily_summary: str = "",
 ) -> list[dict]:
     """ページ本文ブロックを構築する。
 
     構造:
-      ## 本日のサマリー       -- daily_summary がある場合のみ
       ## トピックA (N件)     -- ウォッチトピック別 H2（0件も表示）
-      ## その他 (M件)        -- マッチしなかった論文
-        ### サブカテゴリ (K件) -- サブカテゴリ別 H3
+      ## サブカテゴリ (K件) -- 非マッチ論文のサブカテゴリを H2 にフラット化
     """
     children: list[dict] = []
-
-    if daily_summary:
-        children.append(_heading2("本日のサマリー"))
-        children.append(_paragraph(daily_summary))
 
     # トピック別に振り分け
     topic_buckets: dict[str, list[CategorizedPaper]] = {}
@@ -94,19 +70,18 @@ def _build_page_children(
         for p in bucket:
             children.append(_bulleted_link(p.title, p.url, p.summary))
 
-    # その他（マッチしなかった論文をサブカテゴリ別に）
+    # 非マッチ論文をサブカテゴリ別 H2 でフラットに並べる
     other_papers = [p for p in papers if p.arxiv_id not in placed_ids]
     by_category: dict[str, list[CategorizedPaper]] = defaultdict(list)
     for p in other_papers:
         by_category[p.subcategory].append(p)
 
-    children.append(_heading2(f"その他 ({len(other_papers)}件)"))
     for key in SUBCATEGORY_ORDER:
         cat_papers = by_category.get(key, [])
         if not cat_papers:
             continue
         cat_name = SUBCATEGORIES[key]
-        children.append(_heading3(f"{cat_name} ({len(cat_papers)}件)"))
+        children.append(_heading2(f"{cat_name} ({len(cat_papers)}件)"))
         for p in cat_papers:
             children.append(_bulleted_link(p.title, p.url, p.summary))
 
@@ -119,7 +94,6 @@ _NOTION_BLOCK_LIMIT = 100
 def create_paper_page(
     papers: list[CategorizedPaper],
     topics: list[WatchTopic],
-    daily_summary: str = "",
 ) -> str:
     """Notion DB に論文ページを作成する。
 
@@ -134,7 +108,7 @@ def create_paper_page(
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     title = f"cs.SE 新着論文 - {today}"
 
-    all_children = _build_page_children(papers, today, topics, daily_summary)
+    all_children = _build_page_children(papers, topics)
     first_batch = all_children[:_NOTION_BLOCK_LIMIT]
     remaining = all_children[_NOTION_BLOCK_LIMIT:]
 
