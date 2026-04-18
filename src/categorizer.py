@@ -34,7 +34,15 @@ SubcategoryKey = Literal[tuple(SUBCATEGORIES.keys())]  # type: ignore[valid-type
 class CategorizeItem(BaseModel):
     arxiv_id: str = Field(description="arXiv ID of the paper.")
     subcategory: SubcategoryKey = Field(description="サブカテゴリのキー。")  # type: ignore[valid-type]
-    summary: str = Field(description="日本語2-3文の要約。")
+    background: str = Field(
+        description="課題・背景（1文、定型句禁止）。abstract に明記がなければ空文字。"
+    )
+    approach: str = Field(
+        description="提案手法・アプローチの核（1文）。abstract に明記がなければ空文字。"
+    )
+    findings: str = Field(
+        description="主要な結果・知見（1〜2文）。具体シグナルを優先。abstract に明記がなければ空文字。"
+    )
 
 
 class CategorizeResponse(BaseModel):
@@ -55,7 +63,9 @@ class CategorizedPaper:
     url: str
     announce_type: str
     subcategory: str = "other"
-    summary: str = ""
+    background: str = ""
+    approach: str = ""
+    findings: str = ""
     matched_topics: list[str] = field(default_factory=list)
 
 
@@ -198,7 +208,9 @@ def categorize_papers(
                 url=p.url,
                 announce_type=p.announce_type,
                 subcategory=item.subcategory if item else "other",
-                summary=item.summary if item else "",
+                background=item.background if item else "",
+                approach=item.approach if item else "",
+                findings=item.findings if item else "",
                 matched_topics=matched,
             )
         )

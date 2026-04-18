@@ -30,10 +30,26 @@ def _heading2(text: str) -> dict:
     }
 
 
-def _bulleted_link(title: str, url: str, suffix: str = "") -> dict:
-    rich_text = [{"type": "text", "text": {"content": title, "link": {"url": url}}}]
-    if suffix:
-        rich_text.append({"type": "text", "text": {"content": f"\n{suffix}"}})
+def _paper_bullet(paper: CategorizedPaper) -> dict:
+    rich_text: list[dict] = [
+        {"type": "text", "text": {"content": paper.title, "link": {"url": paper.url}}}
+    ]
+    sections = [
+        ("背景", paper.background),
+        ("手法", paper.approach),
+        ("知見", paper.findings),
+    ]
+    for label, body in sections:
+        if not body:
+            continue
+        rich_text.append(
+            {
+                "type": "text",
+                "text": {"content": f"\n{label}: "},
+                "annotations": {"bold": True},
+            }
+        )
+        rich_text.append({"type": "text", "text": {"content": body}})
     return {
         "object": "block",
         "type": "bulleted_list_item",
@@ -68,7 +84,7 @@ def _build_page_children(
         bucket = topic_buckets.get(topic.label, [])
         children.append(_heading2(f"{topic.label} ({len(bucket)}件)"))
         for p in bucket:
-            children.append(_bulleted_link(p.title, p.url, p.summary))
+            children.append(_paper_bullet(p))
 
     # 非マッチ論文をサブカテゴリ別 H2 でフラットに並べる
     other_papers = [p for p in papers if p.arxiv_id not in placed_ids]
@@ -83,7 +99,7 @@ def _build_page_children(
         cat_name = SUBCATEGORIES[key]
         children.append(_heading2(f"{cat_name} ({len(cat_papers)}件)"))
         for p in cat_papers:
-            children.append(_bulleted_link(p.title, p.url, p.summary))
+            children.append(_paper_bullet(p))
 
     return children
 

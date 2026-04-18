@@ -122,7 +122,12 @@ def format_dry_run(
         lines.append(f"[{topic.label}] ({len(bucket)}件)")
         for p in bucket:
             lines.append(f"  - {p.title}")
-            lines.append(f"    {p.summary}")
+            if p.background:
+                lines.append(f"    背景: {p.background}")
+            if p.approach:
+                lines.append(f"    手法: {p.approach}")
+            if p.findings:
+                lines.append(f"    知見: {p.findings}")
             lines.append(f"    {p.url}")
 
     lines.append("")
