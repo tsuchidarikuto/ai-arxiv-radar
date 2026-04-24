@@ -34,7 +34,7 @@ def _build_text(
     topics: list[WatchTopic],
 ) -> str:
     """Slack メッセージテキストを構築する。"""
-    parts: list[str] = [f"*cs.SE 新着論文 - {date_str}*"]
+    parts: list[str] = [f"*cs.​SE 新着論文 - {date_str}*"]
 
     topic_buckets, other_papers = _split_by_topic(papers)
 
@@ -88,7 +88,7 @@ def notify_no_articles(date_str: str) -> None:
         raise RuntimeError("SLACK_WEBHOOK_URL environment variable is not set")
 
     payload = {
-        "text": f"本日（{date_str}）の cs.SE 新着論文はありませんでした。",
+        "text": f"本日（{date_str}）の cs.​SE 新着論文はありませんでした。",
     }
 
     response = requests.post(webhook_url, json=payload, timeout=30)
