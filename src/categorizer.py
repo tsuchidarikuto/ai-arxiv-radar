@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 _client: genai.Client | None = None
 
-_FALLBACK_MODEL = "gemini-3.1-flash-lite-preview"
+_FALLBACK_MODELS = ("gemini-2.5-flash-lite", "gemini-2.5-flash")
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 5.0
 
@@ -81,7 +81,7 @@ def _get_client() -> genai.Client:
 
 
 def _get_model() -> str:
-    return os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite-preview"
+    return os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
 
 
 def _call_model[T: BaseModel](
@@ -91,43 +91,64 @@ def _call_model[T: BaseModel](
     system_prompt: str,
     response_schema: type[T],
 ) -> T:
-    """指定モデルで structured output を呼び出す。503 フォールバック + 429 リトライ付き。"""
-    for attempt in range(_MAX_RETRIES):
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=content,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    response_mime_type="application/json",
-                    response_json_schema=response_schema.model_json_schema(),
-                ),
-            )
-            text = response.text or ""
-            return response_schema.model_validate_json(text)
-        except ServerError as e:
-            if e.code == 503 and model_name != _FALLBACK_MODEL:
+    """指定モデルで structured output を呼び出す。5xx でモデル fallback + 429 リトライ付き。"""
+    seen: set[str] = set()
+    models_to_try: list[str] = []
+    for m in (model_name, *_FALLBACK_MODELS):
+        if m and m not in seen:
+            seen.add(m)
+            models_to_try.append(m)
+
+    last_error: Exception | None = None
+    for current_model in models_to_try:
+        for attempt in range(_MAX_RETRIES):
+            try:
+                response = client.models.generate_content(
+                    model=current_model,
+                    contents=content,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        response_mime_type="application/json",
+                        response_json_schema=response_schema.model_json_schema(),
+                    ),
+                )
+                text = response.text or ""
+                return response_schema.model_validate_json(text)
+            except ServerError as e:
+                last_error = e
+                if attempt < _MAX_RETRIES - 1:
+                    delay = _RETRY_BASE_DELAY * (2**attempt)
+                    logger.warning(
+                        "Model %s returned %s, retrying in %.1fs (%d/%d)",
+                        current_model,
+                        e.code,
+                        delay,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                    )
+                    time.sleep(delay)
+                    continue
                 logger.warning(
-                    "Model %s returned 503, falling back to %s",
-                    model_name,
-                    _FALLBACK_MODEL,
+                    "Model %s exhausted retries on %s, trying next fallback",
+                    current_model,
+                    e.code,
                 )
-                return _call_model(
-                    client, _FALLBACK_MODEL, content, system_prompt, response_schema
-                )
-            raise
-        except ClientError as e:
-            if e.code == 429 and attempt < _MAX_RETRIES - 1:
-                delay = _RETRY_BASE_DELAY * (2**attempt)
-                logger.warning(
-                    "Rate limited (429), retrying in %.1fs (%d/%d)",
-                    delay,
-                    attempt + 1,
-                    _MAX_RETRIES,
-                )
-                time.sleep(delay)
-                continue
-            raise
+                break
+            except ClientError as e:
+                if e.code == 429 and attempt < _MAX_RETRIES - 1:
+                    delay = _RETRY_BASE_DELAY * (2**attempt)
+                    logger.warning(
+                        "Rate limited (429), retrying in %.1fs (%d/%d)",
+                        delay,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
+
+    if last_error is not None:
+        raise last_error
     raise RuntimeError("Max retries exceeded")
 
 

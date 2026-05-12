@@ -15,7 +15,7 @@ uv run python -m src.main            # 本番実行
 
 ## Gemini モデル
 
-デフォルトモデルは `gemini-3.1-flash-lite-preview` を使用する。環境変数 `GEMINI_MODEL` で上書き可能。
+デフォルトモデルは `gemini-3.1-flash-lite` を使用する。環境変数 `GEMINI_MODEL` で上書き可能。
 
 ## 構成
 
