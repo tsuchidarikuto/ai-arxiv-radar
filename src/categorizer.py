@@ -81,7 +81,7 @@ def _get_client() -> genai.Client:
 
 
 def _get_model() -> str:
-    return os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite-preview"
+    return os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash-lite"
 
 
 def _call_model[T: BaseModel](
