@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from src.arxiv import Paper
 from src.config import SUBCATEGORIES, WatchTopic, load_watch_topics
-from src.prompts import build_categorize_prompt
+from src.prompts import build_categorize_prompt, build_topic_match_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,12 @@ class CategorizeItem(BaseModel):
 
 class CategorizeResponse(BaseModel):
     papers: list[CategorizeItem] = Field(description="分類済み論文のリスト。")
+
+
+class TopicMatchResponse(BaseModel):
+    matched_arxiv_ids: list[str] = Field(
+        description="このトピックに意味的に該当する論文の arxiv_id のリスト。"
+    )
 
 
 # --- Data class ---
@@ -180,10 +186,34 @@ def _match_topic(paper: Paper, topic: WatchTopic) -> bool:
     return any(_normalize(kw) in haystack for kw in topic.keywords if kw.strip())
 
 
+def _match_topic_semantic(
+    client: genai.Client,
+    model: str,
+    papers: list[Paper],
+    topic: WatchTopic,
+) -> set[str]:
+    """Gemini に論文群を渡し、トピックに意味的に該当する arxiv_id の集合を返す。
+
+    API 呼び出しが失敗した場合は literal キーワード判定にフォールバックする。
+    """
+    valid_ids = {p.arxiv_id for p in papers}
+    system_prompt = build_topic_match_prompt(topic)
+    content = _build_papers_content(papers)
+    try:
+        result = _call_model(client, model, content, system_prompt, TopicMatchResponse)
+    except Exception:
+        logger.warning(
+            "Semantic match failed for topic '%s', falling back to keyword match",
+            topic.label,
+        )
+        return {p.arxiv_id for p in papers if _match_topic(p, topic)}
+    return {aid for aid in result.matched_arxiv_ids if aid in valid_ids}
+
+
 def categorize_papers(
     papers: list[Paper],
 ) -> tuple[list[CategorizedPaper], list[WatchTopic]]:
-    """キーワードベースでトピックを割り当て、Gemini でサブカテゴリ+要約を付与する。
+    """Gemini で意味的にトピックを割り当て、サブカテゴリ+要約を付与する。
 
     Returns:
         (分類済み論文リスト, ウォッチトピックリスト)
@@ -207,18 +237,21 @@ def categorize_papers(
         item.arxiv_id: item for item in result.papers
     }
 
-    categorized: list[CategorizedPaper] = []
-    topic_counts: dict[str, int] = {t.label: 0 for t in topics}
+    # トピック毎に Gemini で意味的マッチング（トピック数分の呼び出し）
+    topic_matches: dict[str, set[str]] = {}
+    for topic in topics:
+        matched_ids = _match_topic_semantic(client, model, papers, topic)
+        topic_matches[topic.label] = matched_ids
+        logger.info("Topic '%s': %d matched", topic.label, len(matched_ids))
 
+    categorized: list[CategorizedPaper] = []
     for p in papers:
         item = result_map.get(p.arxiv_id)
 
-        matched: list[str] = []
-        for topic in topics:
-            if _match_topic(p, topic):
-                matched.append(topic.label)
-                topic_counts[topic.label] += 1
-                break  # Sheet 順で先勝ち
+        # Sheet 登録順で該当トピックを列挙（下流は [0] を先勝ちで使用）
+        matched = [
+            t.label for t in topics if p.arxiv_id in topic_matches[t.label]
+        ]
 
         categorized.append(
             CategorizedPaper(
@@ -236,7 +269,5 @@ def categorize_papers(
             )
         )
 
-    for label, count in topic_counts.items():
-        logger.info("Topic '%s': %d matched", label, count)
     logger.info("Categorization complete: %d papers", len(categorized))
     return categorized, topics

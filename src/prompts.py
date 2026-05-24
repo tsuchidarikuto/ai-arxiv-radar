@@ -1,6 +1,6 @@
 """Gemini API に渡すプロンプト定義。"""
 
-from src.config import SUBCATEGORIES
+from src.config import SUBCATEGORIES, WatchTopic
 
 
 def build_categorize_prompt() -> str:
@@ -34,4 +34,32 @@ def build_categorize_prompt() -> str:
 ## 共通ルール
 - 全論文について結果を返す（スキップしない）
 - subcategory は上記キーのいずれか1つ
+"""
+
+
+def build_topic_match_prompt(topic: WatchTopic) -> str:
+    """1 つのウォッチトピックに対する意味的マッチング用システムプロンプトを構築する。"""
+    keywords = "、".join(topic.keywords) if topic.keywords else "（指定なし）"
+    description = topic.description.strip() or "（指定なし）"
+
+    return f"""\
+あなたはソフトウェア工学（cs.SE）の研究者です。
+渡された arXiv 論文リストの中から、次のウォッチトピックに**意味的に該当する**論文を選びます。
+このトピックは特定のユーザーの関心を表しており、該当した論文は本人に通知されます。
+
+## ウォッチトピック
+- トピック名: {topic.label}
+- キーワード（あくまで例示であり網羅的ではない）: {keywords}
+- 関心の説明（判定の主軸となる意味的な手がかり）: {description}
+
+## 判定ルール
+- 論文の title / abstract が表す**内容・主題**がこのトピックの関心に合致するかで判断する。キーワードの文字列が含まれるかどうかでは判断しない。
+- 言い換え・同義語・上位下位概念で表現されていても、主題が合致するなら該当とみなす（取りこぼしを避ける）。
+- キーワードが表面的に登場するだけで、論文の主題がトピックと無関係な場合は該当としない（誤検出を避ける）。
+- 判断に迷う場合は、トピックの「関心の説明」を最優先の基準にする。
+
+## 出力
+- 該当する論文の arxiv_id のみをリストで返す。
+- 該当する論文が 1 件もなければ空リストを返す。
+- 渡された論文に存在しない arxiv_id を生成しない。
 """
