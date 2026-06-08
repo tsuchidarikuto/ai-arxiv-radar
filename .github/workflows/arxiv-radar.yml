@@ -45,6 +45,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # state.json の競合は seen_ids を union して解決する（捨てると再通知が起きる）
+          git config merge.statejson.name "union seen_ids in state.json"
+          git config merge.statejson.driver "scripts/merge-state.sh %O %A %B"
           git add data/state.json
           git diff --staged --quiet && exit 0
           git commit -m "Update state.json [skip ci]"
