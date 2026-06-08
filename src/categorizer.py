@@ -25,6 +25,10 @@ _FALLBACK_MODELS = ("gemini-2.5-flash-lite", "gemini-2.5-flash")
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY = 5.0
 
+# トピックマッチで採用する confidence。FP が多ければ "high" のみに絞る。
+_CONFIDENCE_RANK = {"high": 3, "medium": 2, "low": 1}
+_MIN_CONFIDENCE = os.environ.get("TOPIC_MATCH_MIN_CONFIDENCE", "medium").lower()
+
 
 # --- Pydantic schemas for structured output ---
 
@@ -49,9 +53,19 @@ class CategorizeResponse(BaseModel):
     papers: list[CategorizeItem] = Field(description="分類済み論文のリスト。")
 
 
+class TopicMatchItem(BaseModel):
+    arxiv_id: str = Field(description="該当する論文の arxiv_id。")
+    reason: str = Field(
+        description="トピックの主題と論文の主題が一致する根拠（一文）。"
+    )
+    confidence: Literal["high", "medium", "low"] = Field(
+        description="主題が論文の中心である確信度。"
+    )
+
+
 class TopicMatchResponse(BaseModel):
-    matched_arxiv_ids: list[str] = Field(
-        description="このトピックに意味的に該当する論文の arxiv_id のリスト。"
+    matches: list[TopicMatchItem] = Field(
+        description="このトピックに意味的に該当すると判断した論文のリスト。"
     )
 
 
@@ -207,7 +221,23 @@ def _match_topic_semantic(
             topic.label,
         )
         return {p.arxiv_id for p in papers if _match_topic(p, topic)}
-    return {aid for aid in result.matched_arxiv_ids if aid in valid_ids}
+
+    threshold = _CONFIDENCE_RANK.get(_MIN_CONFIDENCE, _CONFIDENCE_RANK["medium"])
+    matched: set[str] = set()
+    for m in result.matches:
+        if m.arxiv_id not in valid_ids:
+            continue
+        if _CONFIDENCE_RANK.get(m.confidence, 0) < threshold:
+            logger.debug(
+                "Topic '%s': dropped %s (confidence=%s): %s",
+                topic.label,
+                m.arxiv_id,
+                m.confidence,
+                m.reason,
+            )
+            continue
+        matched.add(m.arxiv_id)
+    return matched
 
 
 def categorize_papers(
