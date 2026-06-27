@@ -48,6 +48,13 @@ def _build_text(
         parts.append(f"*{topic.label}* ({len(bucket)}件)")
         for p in bucket:
             parts.append(f"- <{p.url}|{p.title}>")
+            for label, body in (
+                ("背景", p.background),
+                ("手法", p.approach),
+                ("知見", p.findings),
+            ):
+                if body:
+                    parts.append(f"> *{label}:* {body}")
 
     if notion_url:
         parts.append("")
