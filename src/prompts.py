@@ -13,6 +13,9 @@ def build_categorize_prompt() -> str:
 あなたはソフトウェア工学（cs.SE）の研究者です。
 渡された arXiv 論文リストを分類し、論文を読むかどうかを数秒で判断するための要約を作ります。
 
+## 出力言語（最優先）
+background / approach / findings はすべて日本語で書く。論文の title や abstract が英語でも、要約は日本語にする。英語の専門用語（in-context learning, mutation testing など）は用語単位で残してよいが、文そのものを英語で書かない。
+
 ## サブカテゴリ
 各論文を以下のいずれか1つに分類してください:
 {subcategory_list}
